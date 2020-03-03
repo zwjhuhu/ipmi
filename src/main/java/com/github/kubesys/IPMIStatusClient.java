@@ -5,7 +5,9 @@ package com.github.kubesys;
 
 
 import java.net.InetAddress;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import com.veraxsystems.vxipmi.api.async.ConnectionHandle;
 import com.veraxsystems.vxipmi.api.sync.IpmiConnector;
@@ -35,7 +37,7 @@ import com.veraxsystems.vxipmi.common.TypeConverter;
  * @since   2020/3/3
  *
  */
-public class IPMIClient {
+public class IPMIStatusClient {
 	
 	/**
      * This is the value of Last Record ID (FFFFh). In order to retrieve the full set of SDR records, client must repeat
@@ -44,11 +46,7 @@ public class IPMIClient {
      */
     private static final int MAX_REPO_RECORD_ID = 65535;
  
-    private static final String hostname = "133.133.131.217";
- 
-    private static final String username = "admin";
- 
-    private static final String password = "admin";
+    
  
     /**
      * Size of the initial GetSdr message to get record header and size
@@ -68,114 +66,31 @@ public class IPMIClient {
     private static final int HEADER_SIZE = 5;
  
     private int nextRecId;
- 
-    /**
-     * @param args
-     */
-    public static void main(String[] args) {
-    	IPMIClient runner = new IPMIClient();
-        try {
-            runner.doRun();
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
- 
-    public void doRun() throws Exception {
-        // ID 0指示SDR中的第一个记录。下一个IDS可以从记录中检索出来——它们被组织在一个列表中，没有BMC命令来获取所有这些ID。
-        nextRecId = 0;
- 
-        // 一些BMC允许无保留地获取传感器记录，所以我们尝试这样做。
-        int reservationId = 0;
-        int lastReservationId = -1;
- 
-        // 创建连接器
-        IpmiConnector connector = new IpmiConnector(0);
- 
-        // 启动会话到远程主机
-        ConnectionHandle handle = startSession(connector, InetAddress.getByName(hostname), username, password, "",
-                PrivilegeLevel.User);
- 
-        // 更改连接超时时间
+    
+    protected final IpmiConnector connector;
+    
+    protected final ConnectionHandle handle;
+    
+	public IPMIStatusClient(String hostname, String username, String password) throws Exception {
+		this(hostname, username, password, PrivilegeLevel.Administrator);
+	}
+	
+	public IPMIStatusClient(String hostname, String username, String password, PrivilegeLevel level) throws Exception {
+		// 创建连接器
+        this.connector = new IpmiConnector(0);
+		this.handle = startSession(connector, InetAddress.getByName(hostname), 
+									username, password, "",  level);
+		// 更改连接超时时间
         connector.setTimeout(handle, 2750);
- 
-        // 我们得到传感器数据，直到我们遇到ID＝65535，这意味着这个记录是最后一个。
-        while (nextRecId < MAX_REPO_RECORD_ID) {
-            SensorRecord record = null;
- 
-            try {
-                // 填充传感器记录并获取存储库中的下一条记录的ID
-                record = getSensorData(connector, handle, reservationId);
- 
-                int recordReadingId = -1;
- 
-                // 判断接收到的数据是全部传感器记录还是压缩的记录(详见IPMI规范)
-                if (record instanceof FullSensorRecord) {
-                    FullSensorRecord fsr = (FullSensorRecord) record;
-                    recordReadingId = TypeConverter.byteToInt(fsr.getSensorNumber());
-                    System.out.println("传感器名称：" + fsr.getName());
- 
-                } else if (record instanceof CompactSensorRecord) {
-                    CompactSensorRecord csr = (CompactSensorRecord) record;
-                    recordReadingId = TypeConverter.byteToInt(csr.getSensorNumber());
-                    System.out.println("传感器名称：" + csr.getName());
-                }
- 
-                // 如果有记录，我们会得到响应数据
-                GetSensorReadingResponseData data2 = null;
-                try {
-                    if (recordReadingId >= 0) {
-                        data2 = (GetSensorReadingResponseData) connector
-                                .sendMessage(handle, new GetSensorReading(IpmiVersion.V20, handle.getCipherSuite(),
-                                        AuthenticationType.RMCPPlus, recordReadingId));
-                        if (record instanceof FullSensorRecord) {
-                            FullSensorRecord rec = (FullSensorRecord) record;
-                            // 解析传感器读取的记录信息
-                            System.out.println("解析传感器读取的记录信息:" + data2.getSensorReading(rec) + " " + rec.getSensorBaseUnit().toString()
-                                    + (rec.getRateUnit() != RateUnit.None ? " per " + rec.getRateUnit() : ""));
-                        }
-                        if (record instanceof CompactSensorRecord) {
-                            CompactSensorRecord rec = (CompactSensorRecord) record;
-                            // 获取传感器状态
-                            List<ReadingType> events = data2.getStatesAsserted(rec.getSensorType(),
-                                    rec.getEventReadingType());
-                            StringBuilder s = new StringBuilder();
-                            for (int i = 0; i < events.size(); ++i) {
-                                s.append(events.get(i)).append(", ");
-                            }
-                            System.out.println("传感器状态：" + s);
-                        }
-                    }
-                } catch (IPMIException e) {
-                    if (e.getCompletionCode() == CompletionCode.DataNotPresent) {
-                        e.printStackTrace();
-                    } else {
-                        throw e;
-                    }
-                }
-            } catch (IPMIException e) {
-                System.out.println("Getting new reservation ID");
-                System.out.println("156: " + e.getMessage());
-                // 如果获得传感器数据失败，检查预留id是否已经失败了
-                if (lastReservationId == reservationId || e.getCompletionCode() != CompletionCode.ReservationCanceled)
-                    throw e;
-                lastReservationId = reservationId;
- 
-                // 如果失败的原因是取消预留，我们得到新的预留ID并重试
-                // 在获得所有传感器时，这会发生很多次，因为BMC不能管理并行会话，如果出现新的会话，BMC就不能管理旧的会话。
-                reservationId = ((ReserveSdrRepositoryResponseData) connector.sendMessage(handle, new ReserveSdrRepository(IpmiVersion.V20, handle.getCipherSuite(),
-                        AuthenticationType.RMCPPlus))).getReservationId();
-            }
-        }
- 
-        // 关闭会话
-        connector.closeSession(handle);
-        // 关闭连接
-        connector.closeConnection(handle);
-        connector.tearDown();
-    }
- 
-    /**
+	}
+
+	/*****************************************************************
+	 * 
+	 *                 Basic 
+	 * 
+	 ******************************************************************/
+	
+	 /**
      * 启动会话
      *
      * @param connector      连接器
@@ -187,7 +102,7 @@ public class IPMIClient {
      * @return
      * @throws Exception
      */
-    public ConnectionHandle startSession(IpmiConnector connector, InetAddress address, String username, String password, String bmcKey, PrivilegeLevel privilegeLevel) throws Exception {
+    protected ConnectionHandle startSession(IpmiConnector connector, InetAddress address, String username, String password, String bmcKey, PrivilegeLevel privilegeLevel) throws Exception {
         ConnectionHandle handle = connector.createConnection(address);
         CipherSuite cs;
         try {
@@ -213,6 +128,116 @@ public class IPMIClient {
         }
         return handle;
     }
+	
+	public void close() throws Exception {
+		if (connector != null) {
+			 // 关闭会话
+	        connector.closeSession(handle);
+	        // 关闭连接
+	        connector.closeConnection(handle);
+	        connector.tearDown();
+		}
+	}
+	
+	/*****************************************************************
+	 * 
+	 *                 Core 
+	 *
+	 * 
+	 ******************************************************************/
+	
+	
+	/**
+	 * from https://blog.csdn.net/heitkei/article/details/80415252
+	 * 
+	 * @return                 
+	 * @throws Exception        
+	 */
+	public Map<String, String> getSensorData() throws Exception {
+		
+		Map<String, String> data = new HashMap<String, String>();
+		
+        // ID 0指示SDR中的第一个记录。下一个IDS可以从记录中检索出来——它们被组织在一个列表中，没有BMC命令来获取所有这些ID。
+        nextRecId = 0;
+        // 一些BMC允许无保留地获取传感器记录，所以我们尝试这样做。
+        int reservationId = 0;
+        int lastReservationId = -1;
+        // 我们得到传感器数据，直到我们遇到ID＝65535，这意味着这个记录是最后一个。
+        while (nextRecId < MAX_REPO_RECORD_ID) {
+        	
+        	String name = null;
+        	String value = "";
+            SensorRecord record = null;
+ 
+            try {
+                // 填充传感器记录并获取存储库中的下一条记录的ID
+                record = getSensorData(connector, handle, reservationId);
+ 
+                int recordReadingId = -1;
+ 
+                // 判断接收到的数据是全部传感器记录还是压缩的记录(详见IPMI规范)
+                if (record instanceof FullSensorRecord) {
+                    FullSensorRecord fsr = (FullSensorRecord) record;
+                    recordReadingId = TypeConverter.byteToInt(fsr.getSensorNumber());
+                    name = fsr.getName();
+ 
+                } else if (record instanceof CompactSensorRecord) {
+                    CompactSensorRecord csr = (CompactSensorRecord) record;
+                    recordReadingId = TypeConverter.byteToInt(csr.getSensorNumber());
+                    name = csr.getName();
+                }
+ 
+                // 如果有记录，我们会得到响应数据
+                GetSensorReadingResponseData respData = null;
+                try {
+                    if (recordReadingId >= 0) {
+                        respData = (GetSensorReadingResponseData) connector
+                                .sendMessage(handle, new GetSensorReading(IpmiVersion.V20, handle.getCipherSuite(),
+                                        AuthenticationType.RMCPPlus, recordReadingId));
+                        if (record instanceof FullSensorRecord) {
+                            FullSensorRecord rec = (FullSensorRecord) record;
+                            // 解析传感器读取的记录信息
+                            value = respData.getSensorReading(rec) + " " + rec.getSensorBaseUnit().toString()
+                                    + (rec.getRateUnit() != RateUnit.None ? " per " + rec.getRateUnit() : "");
+                        } else if (record instanceof CompactSensorRecord) {
+                            CompactSensorRecord rec = (CompactSensorRecord) record;
+                            // 获取传感器状态
+                            List<ReadingType> events = respData.getStatesAsserted(rec.getSensorType(),
+                                    rec.getEventReadingType());
+                            StringBuilder s = new StringBuilder();
+                            for (int i = 0; i < events.size(); ++i) {
+                                s.append(events.get(i)).append(", ");
+                            }
+                            value += s.toString();
+                        }
+                    }
+                } catch (IPMIException e) {
+                    //
+                }
+            } catch (IPMIException e) {
+                System.out.println("Getting new reservation ID");
+                System.out.println("156: " + e.getMessage());
+                // 如果获得传感器数据失败，检查预留id是否已经失败了
+                if (lastReservationId == reservationId || e.getCompletionCode() != CompletionCode.ReservationCanceled)
+                    throw e;
+                lastReservationId = reservationId;
+ 
+                // 如果失败的原因是取消预留，我们得到新的预留ID并重试
+                // 在获得所有传感器时，这会发生很多次，因为BMC不能管理并行会话，如果出现新的会话，BMC就不能管理旧的会话。
+                reservationId = ((ReserveSdrRepositoryResponseData) connector.sendMessage(handle, new ReserveSdrRepository(IpmiVersion.V20, handle.getCipherSuite(),
+                        AuthenticationType.RMCPPlus))).getReservationId();
+            }
+            
+            if (name != null) {
+            	data.put(name, value);
+            }
+        }
+        
+        return data;
+ 
+    }
+ 
+   
  
     /**
      * 获取传感器数据
@@ -223,7 +248,7 @@ public class IPMIClient {
      * @return
      * @throws Exception
      */
-    public SensorRecord getSensorData(IpmiConnector connector, ConnectionHandle handle, int reservationId)
+    protected SensorRecord getSensorData(IpmiConnector connector, ConnectionHandle handle, int reservationId)
             throws Exception {
         try {
             // BMC功能是有限的，这意味着有时记录大小超过消息的最大大小。因为我们不知道这个记录的大小，所以我们先把整个记录放在第一位。
