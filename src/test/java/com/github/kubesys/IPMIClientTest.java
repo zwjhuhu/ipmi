@@ -14,11 +14,11 @@ package com.github.kubesys;
  */
 public class IPMIClientTest {
 	
-	private static final String hostname = "133.133.131.217";
+	private static final String hostname = "192.168.96.22";
 	 
     private static final String username = "admin";
  
-    private static final String password = "admin";
+    private static final String password = "password";
     /**
      * @param args
      * @throws Exception 
@@ -26,14 +26,14 @@ public class IPMIClientTest {
     public static void main(String[] args) throws Exception {
 //    	testGetStatus();
     	IPMILifecycleClient client = new IPMILifecycleClient(hostname, username, password);
-//    	System.out.println(client.powerOn());
-    	client.startMachine();
+    	System.out.println(client.powerOn());
+//    	client.startMachine();
     	client.close();
     }
-	protected static void testGetStatus() throws Exception {
-		IPMIStatusClient client = new IPMIStatusClient(hostname, username, password);
-        System.out.println(client.getSensorData());
-        client.close();
-	}
+//	protected static void testGetStatus() throws Exception {
+//		IPMIStatusClient client = new IPMIStatusClient(hostname, username, password);
+//        System.out.println(client.getSensorData());
+//        client.close();
+//	}
  
 }
